@@ -1,5 +1,6 @@
 import debug from 'debug';
 import { getConfig } from './config';
+import ShellyAuthService from './lib/auth';
 import { createInfluxService } from './lib/InfluxService';
 import { logger } from './lib/Logger';
 import { ShellyService } from './lib/ShellyService';
@@ -27,7 +28,12 @@ const shutdownController = new AbortController();
 // Global state for cleanup
 const services: { influx: ReturnType<typeof createInfluxService>; shelly: ShellyService[] } = {
   influx: createInfluxService(config.influx),
-  shelly: config.shelly.map((cfg) => new ShellyService(cfg, shutdownController.signal)),
+  shelly: config.shelly.map((cfg) => new ShellyService(
+    cfg,
+    new ShellyAuthService(cfg),
+    shutdownController.signal,
+  )
+  ),
 };
 
 // Track active timeouts for cleanup
@@ -191,11 +197,10 @@ process.on('unhandledRejection', (reason) => {
 });
 
 /**
- * Start the application after ensuring the InfluxDB connection is working.
- * Shelly device availability is handled per-device in deviceScrapeLoop with backoff.
+ * Ensure the InfluxDB connection is working.
+ * Retry InfluxDB connection until it succeeds — no point scraping if we can't write
  */
-async function startApplication(): Promise<void> {
-  // Retry InfluxDB connection until it succeeds — no point scraping if we can't write
+async function testInfluxDbConnection(): Promise<void> {
   while (true) {
     try {
       await services.influx.testConnection();
@@ -213,6 +218,21 @@ async function startApplication(): Promise<void> {
       });
     }
   }
+}
+
+async function testShellyConnections(): Promise<void> {
+  await Promise.all(
+    services.shelly.map(async (shelly, i, services) => {
+      await shelly.authentication.getAuthObject();
+      await shelly.authentication.testAuthWorks();
+      logger.info(`${icons.success} Connection to Shelly device ${shelly.getDeviceName()} works!`);
+    }
+  ));
+}
+
+async function startApplication(): Promise<void> {
+  await testInfluxDbConnection();
+  await testShellyConnections();
 
   logger.info(`${icons.info} Starting scrapers with interval of ${config.scrapeInterval} seconds`);
   startScraping();

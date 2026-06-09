@@ -8,4 +8,6 @@ Thumbs.db
 .env
 temp
 config/development.yaml
+config/production.yaml
 .history/
+.test_bash_scripts/

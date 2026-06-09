@@ -5,6 +5,8 @@
 
 import debug from 'debug';
 import type { PointInput } from './InfluxService';
+import { logger } from '../lib/Logger';
+import ShellyAuthService from './auth';
 
 const d = debug('s2i:ShellyService');
 
@@ -41,16 +43,26 @@ export class ShellyService {
   protected readonly baseUrl: string;
   protected readonly authHeader?: string;
   protected readonly config: ShellyConfig;
+  public readonly authentication: ShellyAuthService;
   protected readonly shutdownSignal?: AbortSignal;
 
-  constructor(config: ShellyConfig, shutdownSignal?: AbortSignal) {
+  constructor(
+    config: ShellyConfig,
+    authService: ShellyAuthService,
+    shutdownSignal?: AbortSignal
+  ) {
     this.baseUrl = `http://${config.host}`;
     this.config = config;
     this.shutdownSignal = shutdownSignal;
-    if (config.username && config.password) {
-      const auth = Buffer.from(`${config.username}:${config.password}`).toString('base64');
-      this.authHeader = `Basic ${auth}`;
-    }
+    this.authentication = authService;
+    logger.info(
+      `${config.username}:${config.password}`
+    );
+    // TODO: check when to use this authentication method.
+    // if (config.username && config.password) {
+    //   const auth = Buffer.from(`${config.username}:${config.password}`).toString('base64');
+    //   this.authHeader = `Basic ${auth}`;
+    // }
     d('initialized for host %s', this.baseUrl);
   }
 
@@ -88,7 +100,7 @@ export class ShellyService {
    */
   async *getHistoryPaged(
     fromTimestamp: number,
-    toTimestamp?: number
+    toTimestamp?: number,
   ): AsyncGenerator<EMHistory> {
     d(
       'fetching history paged from=%s to=%s',
@@ -211,38 +223,58 @@ export class ShellyService {
    */
   protected async fetchHistory(
     fromTimestamp: number,
-    toTimestamp?: number
+    toTimestamp?: number,
   ): Promise<EMDataResponse> {
     const headers: Record<string, string> = {
       Accept: 'application/json',
     };
-    if (this.authHeader) {
-      headers.Authorization = this.authHeader;
-    }
+    // if (this.authHeader) {
+    //   headers.Authorization = this.authHeader;
+    // }
 
-    const params = new URLSearchParams({
-      id: '0',
-      ts: fromTimestamp.toString(),
-      ...(toTimestamp && { end_ts: toTimestamp.toString() }),
-    });
+    // const params = new URLSearchParams({
+    //   id: '0',
+    //   ts: fromTimestamp.toString(),
+    //   ...(toTimestamp && { end_ts: toTimestamp.toString() }),
+    //   auth: authObject,
+    // });
 
-    const url = `${this.baseUrl}/rpc/EMData.GetData?${params.toString()}`;
+    const authObject = await this.authentication.getAuthObject();
+
+    const payload = {
+      params: {
+        id: 0,
+        ts: fromTimestamp.toString(),
+        ...(toTimestamp && { end_ts: toTimestamp.toString() }),
+      },
+      id: 15,
+      auth: authObject,
+      method: "EMData.GetData",
+    };
+
+    console.log(authObject)
+
+    const url = `${this.baseUrl}/rpc`;
+    // const url = `${this.baseUrl}/rpc/EMData.GetData?${params.toString()}`;
     d('fetching data from: %s', url);
 
     const response = await fetch(url, {
+      method: 'POST',
       headers,
+      verbose: true,
       signal: this.createAbortSignal(30_000),
+      body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
       throw new Error(
-        `Failed to fetch history: ${response.status} ${
-          response.statusText
+        `Failed to fetch history: ${response.status} ${response.statusText
         }\n${await response.text()}`
       );
     }
 
     const json = (await response.json()) as Record<string, unknown>;
+    console.log(json)
     if (!json || !Array.isArray(json.data)) {
       throw new Error('Unexpected response from Shelly API: missing "data" array');
     }
