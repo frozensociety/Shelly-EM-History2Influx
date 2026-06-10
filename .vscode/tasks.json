@@ -1,0 +1,39 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Bun: Start Debugger",
+            "type": "shell",
+            "command": "${env:HOME}/.bun/bin/bun",
+            "args": [
+                "--inspect-brk=127.0.0.1:5000/run_bun",
+                "src/index.ts"
+            ],
+            "isBackground": true,
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "NODE_ENV": "production",
+                    "PATH": "${env:HOME}/.bun/bin:${env:PATH}"
+                }
+            },
+            "problemMatcher": [
+                {
+                    "pattern": [
+                        {
+                            "regexp": ".",
+                            "file": 1,
+                            "location": 2,
+                            "message": 3
+                        }
+                    ],
+                    "background": {
+                        "activeOnStart": true,
+                        "beginsPattern": "Listening:",
+                        "endsPattern": "ws://127.0.0.1:5000/run_bun"
+                    }
+                }
+            ]
+        }
+    ]
+}

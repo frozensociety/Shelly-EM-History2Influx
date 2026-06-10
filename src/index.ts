@@ -1,6 +1,6 @@
 import debug from 'debug';
 import { getConfig } from './config';
-import ShellyAuthService from './lib/auth';
+import ShellyAuthService from './lib/ShellyAuthService';
 import { createInfluxService } from './lib/InfluxService';
 import { logger } from './lib/Logger';
 import { ShellyService } from './lib/ShellyService';
@@ -63,12 +63,9 @@ async function scrapeDevice(shelly: ShellyService): Promise<boolean> {
     logger.error(`${icons.error} Error getting last timestamp from InfluxDB: ${error}`);
     return false;
   }
-
-  d(
-    'fetching history since %s for device %s',
-    new Date(lastTimestamp * 1000).toISOString(),
-    shelly.getDeviceName()
-  );
+  
+  const date = new Date(lastTimestamp * 1000).toISOString();
+  logger.info(`fetching history since ${date} for device ${shelly.getDeviceName()}`);
 
   let totalPoints = 0;
   try {
@@ -227,7 +224,7 @@ async function testShellyConnections(): Promise<void> {
       await shelly.authentication.testAuthWorks();
       logger.info(`${icons.success} Connection to Shelly device ${shelly.getDeviceName()} works!`);
     }
-  ));
+    ));
 }
 
 async function startApplication(): Promise<void> {

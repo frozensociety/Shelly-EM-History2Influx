@@ -1,0 +1,16 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Launch and attach",
+            "type": "bun",
+            "request": "attach",
+            "url": "ws://127.0.0.1:5000/run_bun",
+            "preLaunchTask": "Bun: Start Debugger",
+            "internalConsoleOptions": "openOnSessionStart"
+        }
+    ]
+}

@@ -124,7 +124,6 @@ class ShellyAuthService {
 
     const response = await fetch(url, {
       method: 'POST',
-      verbose: true,
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         id: 1,

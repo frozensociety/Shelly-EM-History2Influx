@@ -7,10 +7,12 @@
 # - tags: Required. At least one tag to identify the device in InfluxDB
 #   - device_name: Required tag to identify the device
 # - measurement: Optional. Name of the measurement in InfluxDB (defaults to 'shelly_em')
+# - historyFetchingDelayInMs: Optional. delay in ms between history-fetches
 #
 # Example for multiple devices:
 # shelly:
 #   - host: "192.168.1.100"
+#     historyFetchingDelayInMs: 50
 #     tags:
 #       device_name: "Shelly-3EM_Kitchen"
 #   - host: "192.168.1.101" 

@@ -1,0 +1,8 @@
+services:
+  shelly-collector:
+      image: shelly-importer
+      environment:
+        - NODE_ENV=production
+      build:
+        context: .
+        dockerfile: Dockerfile

@@ -6,7 +6,7 @@
 import debug from 'debug';
 import type { PointInput } from './InfluxService';
 import { logger } from '../lib/Logger';
-import ShellyAuthService from './auth';
+import ShellyAuthService from './ShellyAuthService';
 
 const d = debug('s2i:ShellyService');
 
@@ -19,6 +19,7 @@ export type ShellyConfig = {
   password?: string;
   tags: Record<string, string>;
   measurement?: string;
+  historyFetchingDelayInMs?: number; // delay not to overwhelm device
 };
 
 export type EMDataResponse = {
@@ -116,7 +117,7 @@ export class ShellyService {
         break;
       }
       // Small delay to avoid overwhelming the Shelly device
-      await new Promise((r) => setTimeout(r, 500));
+      await new Promise((r) => setTimeout(r, this.config.historyFetchingDelayInMs ?? 500));
       d('fetching next page from ts=%s', formatDate(response.next_record_ts));
       response = await this.fetchHistory(response.next_record_ts, toTimestamp);
       const page = this.convertEMData(response);
@@ -228,18 +229,9 @@ export class ShellyService {
     const headers: Record<string, string> = {
       Accept: 'application/json',
     };
-    // if (this.authHeader) {
-    //   headers.Authorization = this.authHeader;
-    // }
-
-    // const params = new URLSearchParams({
-    //   id: '0',
-    //   ts: fromTimestamp.toString(),
-    //   ...(toTimestamp && { end_ts: toTimestamp.toString() }),
-    //   auth: authObject,
-    // });
 
     const authObject = await this.authentication.getAuthObject();
+    // console.log(authObject)
 
     const payload = {
       params: {
@@ -252,16 +244,13 @@ export class ShellyService {
       method: "EMData.GetData",
     };
 
-    console.log(authObject)
-
     const url = `${this.baseUrl}/rpc`;
-    // const url = `${this.baseUrl}/rpc/EMData.GetData?${params.toString()}`;
     d('fetching data from: %s', url);
 
     const response = await fetch(url, {
       method: 'POST',
       headers,
-      verbose: true,
+      // verbose: true,
       signal: this.createAbortSignal(30_000),
       body: JSON.stringify(payload),
     });
@@ -274,11 +263,12 @@ export class ShellyService {
     }
 
     const json = (await response.json()) as Record<string, unknown>;
-    console.log(json)
-    if (!json || !Array.isArray(json.data)) {
+    const result = json.result as Record<string, unknown> | undefined;
+    // console.log(result)
+    if (!result || !Array.isArray(result?.data)) {
       throw new Error('Unexpected response from Shelly API: missing "data" array');
     }
-    return json as unknown as EMDataResponse;
+    return result as unknown as EMDataResponse;
   }
 
   /**
