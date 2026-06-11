@@ -5,6 +5,7 @@ import { createInfluxService } from './lib/InfluxService';
 import { logger } from './lib/Logger';
 import { ShellyService } from './lib/ShellyService';
 import HttpError from './lib/errors';
+import { match } from 'ts-pattern';
 
 // Debug namespace
 const d = debug('s2i');
@@ -16,6 +17,10 @@ const icons = {
   warning: '⚠️',
   success: '✅',
 } as const;
+
+/** Maximum backoff interval in seconds (15 minutes) */
+const MAX_BACKOFF_SECONDS = 900;
+
 
 logger.info(
   `🚀 Shelly EM History 2 Influx ${process.env.SHELLY_EM_HISTORY2INFLUX_VERSION || 'development-version'}`
@@ -40,29 +45,27 @@ const services: { influx: ReturnType<typeof createInfluxService>; shelly: Shelly
 // Track active timeouts for cleanup
 const activeTimeouts: Set<ReturnType<typeof setTimeout>> = new Set();
 
+enum ScrapeResult {
+  success,
+  failure,
+  authenticationErrorResolved,
+  authenticationErrorUnresolved,
+}
+
 /**
  * Scrape data from a single Shelly device and write to InfluxDB page by page.
  * Each API page is written immediately so progress is preserved on abort.
  * Returns true on success, false on failure.
  */
-async function scrapeDevice(shelly: ShellyService): Promise<boolean> {
+async function scrapeDevice(shelly: ShellyService): Promise<ScrapeResult> {
   const measurement = shelly.getMeasurementName();
 
   let lastTimestamp = 0;
   try {
-    lastTimestamp =
-      (await services.influx.getLastTimestamp(measurement, shelly.getDeviceName())) ?? 0;
-    // increment time by 1 second because we already scraped data until "lastTimestamp"
-    lastTimestamp++;
-    d('last timestamp for measurement %s: %d', measurement, lastTimestamp);
-    if (lastTimestamp < 10) {
-      logger.warn(
-        `${icons.warning} Initial scrape for ${shelly.getDeviceName()} - this could take a while...`
-      );
-    }
+    lastTimestamp = await fetchLastTimestampFromInflux(lastTimestamp, measurement, shelly);
   } catch (error) {
     logger.error(`${icons.error} Error getting last timestamp from InfluxDB: ${error}`);
-    return false;
+    return ScrapeResult.failure;
   }
 
   const date = new Date(lastTimestamp * 1000).toISOString();
@@ -87,10 +90,16 @@ async function scrapeDevice(shelly: ShellyService): Promise<boolean> {
       );
     }
   } catch (error) {
-    logger.error(
-      `${icons.error} Error during scrape for ${shelly.getDeviceName()}: ${error}`
-    );
-    return false;
+    if (error instanceof HttpError) {
+      reAuthenticateAfterError(shelly);
+      return ScrapeResult.authenticationErrorResolved;
+    } else {
+
+      logger.error(
+        `${icons.error} Error during scrape for ${shelly.getDeviceName()}: ${error}`
+      );
+      return ScrapeResult.failure;
+    }
   }
 
   if (totalPoints === 0) {
@@ -98,11 +107,40 @@ async function scrapeDevice(shelly: ShellyService): Promise<boolean> {
     logger.warn(`${icons.warning} No new history-data from device ${shelly.getDeviceName()}`);
   }
 
-  return true;
+  return ScrapeResult.success;
 }
 
-/** Maximum backoff interval in seconds (15 minutes) */
-const MAX_BACKOFF_SECONDS = 900;
+async function reAuthenticateAfterError(shelly: ShellyService) {
+  logger.error(`❌ Authentication error for ${shelly.getDeviceName()}: Unauthorized 401`);
+  logger.info(`Performing authentication`);
+
+  for (let attempts = 1; attempts <= 3; attempts++) {
+    try {
+      shelly.authService.reset();
+      await shelly.authService.getAuthObject();
+      await shelly.authService.testAuthWorks();
+      break;
+    } catch (error) {
+      attempts++
+      await new Promise((r) => setTimeout(r, 5000 * attempts));
+    }
+  }
+}
+
+
+async function fetchLastTimestampFromInflux(lastTimestamp: number, measurement: string, shelly: ShellyService) {
+  lastTimestamp =
+    (await services.influx.getLastTimestamp(measurement, shelly.getDeviceName())) ?? 0;
+  // increment time by 1 second because we already scraped data until "lastTimestamp"
+  lastTimestamp++;
+  d('last timestamp for measurement %s: %d', measurement, lastTimestamp);
+  if (lastTimestamp < 10) {
+    logger.warn(
+      `${icons.warning} Initial scrape for ${shelly.getDeviceName()} - this could take a while...`
+    );
+  }
+  return lastTimestamp;
+}
 
 /**
  * Continuous scraping loop for a single device with exponential backoff on failures
@@ -111,33 +149,22 @@ async function deviceScrapeLoop(shelly: ShellyService): Promise<never> {
   let consecutiveFailures = 0;
 
   while (true) {
+    let scrapeResult = ScrapeResult.failure;
     try {
-      const success = await scrapeDevice(shelly);
-      if (success) {
+      consecutiveFailures++;
+      scrapeResult = await scrapeDevice(shelly);
+      if (scrapeResult === ScrapeResult.success || scrapeResult === ScrapeResult.authenticationErrorResolved) {
         consecutiveFailures = 0;
-      } else {
-        consecutiveFailures++;
       }
-    } catch (error: HttpError | unknown) {
-      if (error instanceof HttpError && error.statusCode === 401) {
-        try {
-          await reAuthenticateAfterError(shelly, error);
-        } catch (error) {
-          consecutiveFailures++;
-          logger.error(`${icons.error} Unexpected error while authentication for ${shelly.getDeviceName()}: ${error}`);
-        }
-      } else {
-        consecutiveFailures++;
-        logger.error(`${icons.error} Unexpected error for ${shelly.getDeviceName()}: ${error}`);
-      }
+    } catch (error) {
+      logger.error(`${icons.error} Unexpected error for ${shelly.getDeviceName()}: ${error}`);
     }
 
-
     // Exponential backoff: double the interval on each consecutive failure, capped at MAX_BACKOFF_SECONDS
-    const waitSeconds =
-      consecutiveFailures > 0
-        ? Math.min(config.scrapeInterval * 2 ** consecutiveFailures, MAX_BACKOFF_SECONDS)
-        : config.scrapeInterval;
+    const waitSeconds = match({ scrapeResult })
+      .with({ scrapeResult: ScrapeResult.success }, () => config.scrapeInterval)
+      .with({ scrapeResult: ScrapeResult.authenticationErrorResolved }, () => 0)
+      .otherwise(() => Math.min(config.scrapeInterval * 2 ** consecutiveFailures, MAX_BACKOFF_SECONDS))
 
     if (consecutiveFailures > 0) {
       d(
@@ -158,14 +185,6 @@ async function deviceScrapeLoop(shelly: ShellyService): Promise<never> {
   }
 }
 
-async function reAuthenticateAfterError(shelly: ShellyService, error: HttpError) {
-  logger.error(`${icons.error} Authentication error for ${shelly.getDeviceName()}: ${error}`);
-  logger.info(`Performing authentication`);
-  
-  shelly.authService.reset();
-  await shelly.authService.getAuthObject();
-  await shelly.authService.testAuthWorks();
-}
 
 /**
  * Start independent scraping loops for all devices
