@@ -4,6 +4,7 @@ import ShellyAuthService from './lib/ShellyAuthService';
 import { createInfluxService } from './lib/InfluxService';
 import { logger } from './lib/Logger';
 import { ShellyService } from './lib/ShellyService';
+import HttpError from './lib/errors';
 
 // Debug namespace
 const d = debug('s2i');
@@ -63,7 +64,7 @@ async function scrapeDevice(shelly: ShellyService): Promise<boolean> {
     logger.error(`${icons.error} Error getting last timestamp from InfluxDB: ${error}`);
     return false;
   }
-  
+
   const date = new Date(lastTimestamp * 1000).toISOString();
   logger.info(`fetching history since ${date} for device ${shelly.getDeviceName()}`);
 
@@ -117,10 +118,20 @@ async function deviceScrapeLoop(shelly: ShellyService): Promise<never> {
       } else {
         consecutiveFailures++;
       }
-    } catch (error) {
-      consecutiveFailures++;
-      logger.error(`${icons.error} Unexpected error for ${shelly.getDeviceName()}: ${error}`);
+    } catch (error: HttpError | unknown) {
+      if (error instanceof HttpError && error.statusCode === 401) {
+        try {
+          await reAuthenticateAfterError(shelly, error);
+        } catch (error) {
+          consecutiveFailures++;
+          logger.error(`${icons.error} Unexpected error while authentication for ${shelly.getDeviceName()}: ${error}`);
+        }
+      } else {
+        consecutiveFailures++;
+        logger.error(`${icons.error} Unexpected error for ${shelly.getDeviceName()}: ${error}`);
+      }
     }
+
 
     // Exponential backoff: double the interval on each consecutive failure, capped at MAX_BACKOFF_SECONDS
     const waitSeconds =
@@ -145,6 +156,15 @@ async function deviceScrapeLoop(shelly: ShellyService): Promise<never> {
       activeTimeouts.add(timeout);
     });
   }
+}
+
+async function reAuthenticateAfterError(shelly: ShellyService, error: HttpError) {
+  logger.error(`${icons.error} Authentication error for ${shelly.getDeviceName()}: ${error}`);
+  logger.info(`Performing authentication`);
+  
+  shelly.authService.reset();
+  await shelly.authService.getAuthObject();
+  await shelly.authService.testAuthWorks();
 }
 
 /**
@@ -220,8 +240,8 @@ async function testInfluxDbConnection(): Promise<void> {
 async function testShellyConnections(): Promise<void> {
   await Promise.all(
     services.shelly.map(async (shelly, i, services) => {
-      await shelly.authentication.getAuthObject();
-      await shelly.authentication.testAuthWorks();
+      await shelly.authService.getAuthObject();
+      await shelly.authService.testAuthWorks();
       logger.info(`${icons.success} Connection to Shelly device ${shelly.getDeviceName()} works!`);
     }
     ));

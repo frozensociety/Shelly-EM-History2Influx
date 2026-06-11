@@ -6,7 +6,8 @@
 import debug from 'debug';
 import type { PointInput } from './InfluxService';
 import { logger } from '../lib/Logger';
-import ShellyAuthService from './ShellyAuthService';
+import ShellyAuthService, { type ShellyAuthObject } from './ShellyAuthService';
+import HttpError from './errors';
 
 const d = debug('s2i:ShellyService');
 
@@ -37,6 +38,10 @@ export type EMHistory = {
   [key: string]: number;
 }[];
 
+const defaultHeaders: Record<string, string> = {
+  Accept: 'application/json',
+};
+
 /**
  * Service for interacting with Shelly EM devices
  */
@@ -44,7 +49,7 @@ export class ShellyService {
   protected readonly baseUrl: string;
   protected readonly authHeader?: string;
   protected readonly config: ShellyConfig;
-  public readonly authentication: ShellyAuthService;
+  public readonly authService: ShellyAuthService;
   protected readonly shutdownSignal?: AbortSignal;
 
   constructor(
@@ -55,7 +60,7 @@ export class ShellyService {
     this.baseUrl = `http://${config.host}`;
     this.config = config;
     this.shutdownSignal = shutdownSignal;
-    this.authentication = authService;
+    this.authService = authService;
     logger.info(
       `${config.username}:${config.password}`
     );
@@ -217,6 +222,8 @@ export class ShellyService {
     return AbortSignal.any(signals);
   }
 
+
+
   /**
    * Fetch raw history data from the Shelly device
    * @param fromTimestamp - Start timestamp in seconds
@@ -226,14 +233,34 @@ export class ShellyService {
     fromTimestamp: number,
     toTimestamp?: number,
   ): Promise<EMDataResponse> {
-    const headers: Record<string, string> = {
-      Accept: 'application/json',
-    };
+    const url = `${this.baseUrl}/rpc`;
+    d('fetching data from: %s', url);
 
-    const authObject = await this.authentication.getAuthObject();
-    // console.log(authObject)
+    const authObject = await this.authService.getAuthObject();
+    const payload = this.createRequestBody(fromTimestamp, toTimestamp, authObject);
 
-    const payload = {
+    const response = await fetch(url, {
+      // verbose: true,
+      method: 'POST',
+      headers: defaultHeaders,
+      signal: this.createAbortSignal(30_000),
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      throw new HttpError(
+        `Failed to fetch history: ${response.status} ${response.statusText
+        }\n${await response.text()}`,
+        response.status,
+      );
+    }
+
+    return await this.parseHistoryResult(response);
+  }
+
+
+  private createRequestBody(fromTimestamp: number, toTimestamp: number | undefined, authObject: ShellyAuthObject) {
+    return {
       params: {
         id: 0,
         ts: fromTimestamp.toString(),
@@ -243,25 +270,9 @@ export class ShellyService {
       auth: authObject,
       method: "EMData.GetData",
     };
+  }
 
-    const url = `${this.baseUrl}/rpc`;
-    d('fetching data from: %s', url);
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers,
-      // verbose: true,
-      signal: this.createAbortSignal(30_000),
-      body: JSON.stringify(payload),
-    });
-
-    if (!response.ok) {
-      throw new Error(
-        `Failed to fetch history: ${response.status} ${response.statusText
-        }\n${await response.text()}`
-      );
-    }
-
+  private async parseHistoryResult(response: Response) {
     const json = (await response.json()) as Record<string, unknown>;
     const result = json.result as Record<string, unknown> | undefined;
     // console.log(result)
@@ -271,12 +282,10 @@ export class ShellyService {
     return result as unknown as EMDataResponse;
   }
 
-  /**
-   * Test the connection to the Shelly device
-   */
-  async testConnection(): Promise<void> {
+  async testConnectionToShellyDevice(): Promise<void> {
     d('testing connection to %s', this.baseUrl);
     const headers: Record<string, string> = {};
+    // TODO: Fix auth and , not working anymore with newer device/firmware
     if (this.authHeader) {
       headers.Authorization = this.authHeader;
     }

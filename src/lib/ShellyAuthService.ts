@@ -35,13 +35,11 @@ class ShellyAuthService {
    * Handles initial login and nonce refresh automatically.
    */
   public async getAuthObject(): Promise<ShellyAuthObject> {
-    // If we have a valid auth object, increment nc and return
     if (this.authObject) {
       this.incrementNonceCount();
       return this.authObject;
     }
 
-    // Perform initial authentication
     await this.authenticate();
 
     if (!this.authObject) {

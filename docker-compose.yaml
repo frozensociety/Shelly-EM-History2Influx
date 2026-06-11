@@ -3,6 +3,20 @@ services:
       image: shelly-importer
       environment:
         - NODE_ENV=production
-      build:
-        context: .
-        dockerfile: Dockerfile
+      build: .
+      restart: on-failure:3 
+      volumes:
+        - ./config:/app/config
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "13000:3000"
+    env_file:
+      - ./grafana.env
+    # environment:
+    #   - GF_SECURITY_ADMIN_USER=admin
+    #   - GF_SECURITY_ADMIN_PASSWORD=admin
+    #   - GF_USERS_ALLOW_SIGN_UP=false
+
+

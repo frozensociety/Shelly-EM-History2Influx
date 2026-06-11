@@ -51,6 +51,6 @@ describe('ShellyService E2E', () => {
       host: mockServer.host,
       tags: { device_name: 'test' },
     });
-    expect(shellyService.testConnection()).resolves;
+    expect(shellyService.testConnectionToShellyDevice()).resolves;
   });
 });
